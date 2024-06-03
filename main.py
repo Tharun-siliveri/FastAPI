@@ -53,6 +53,10 @@ def authenticate_user(username: str, password: str):
     cursor = connection.cursor(dictionary=True)
     cursor.execute("SELECT * FROM users WHERE username=%s", (username,))
     user = cursor.fetchone()
+    # if username is not found check mail also
+    if not user:
+        cursor.execute("SELECT * FROM users WHERE email=%s", (username,))
+        user = cursor.fetchone()
     # print(f"User found: {user}")
     close_connection(connection)
     if user and verify_password(password, user['password']):
@@ -125,4 +129,44 @@ async def login(user: User):
     access_token = create_access_token(data={"sub": db_user['username']})
     return {"access_token": access_token, "token_type": "bearer"}
 
-# here i want to create new features
+# here i want to create new features like register user...
+# register with username , email and password
+
+class RegUser(BaseModel):
+    username: str
+    email: str
+    password: str
+    disabled: Union[bool, None] = None
+
+@app.post("/register")
+async def register(user: RegUser):
+    connection = get_connection()
+    cursor = connection.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM users WHERE username=%s", (user.username,))
+    existing_user = cursor.fetchone()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
+    cursor.execute("INSERT INTO users (username, email, password) VALUES (%s, %s, %s)", (user.username, user.email, get_password_hash(user.password)))
+    connection.commit()
+    close_connection(connection)
+    return {"message": "User registered successfully"}
+
+# get all users 
+@app.get("/users")
+async def get_users():
+    connection = get_connection()
+    cursor = connection.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM users")
+    users = cursor.fetchall()
+    close_connection(connection)
+    return users
+
+# to update the user of me 
+@app.put("/users/me/")
+async def update_user_me(user: RegUser, current_user: Annotated[User, Depends(get_current_active_user)]):
+    connection = get_connection()
+    cursor = connection.cursor(dictionary=True)
+    cursor.execute("UPDATE users SET username=%s, email=%s, password=%s WHERE id=%s", (user.username, user.email, get_password_hash(user.password), current_user['id']))
+    connection.commit()
+    close_connection(connection)
+    return {"message": "User updated successfully"}
