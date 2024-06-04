@@ -172,10 +172,12 @@ async def update_user(user: RegUser, current_user: Annotated[User, Depends(get_c
     return {"message": "User updated successfully"}
 
 
-# now lets create filters to get users based on that
+
+# now lets create filters to get users based on the query params
 
 @app.get("/users")
 async def get_users(
+    # current_user: Annotated[User, Depends(get_current_active_user)],
     username: Optional[str] = Query(None),
     email: Optional[str] = Query(None),
     first_name: Optional[str] = Query(None),
@@ -203,10 +205,6 @@ async def get_users(
 
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-
-    # Debugging output
-    print("Final query:", query)
-    print("Values:", values)
 
     cursor.execute(query, values)
     users = cursor.fetchall()
