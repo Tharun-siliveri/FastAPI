@@ -233,11 +233,19 @@ minio_client = Minio(
 if not minio_client.bucket_exists(MINIO_BUCKET_NAME):
     minio_client.make_bucket(MINIO_BUCKET_NAME)
 
+MAX_FILE_SIZE_MB = 5
+MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+
 @app.post("/upload")
 async def upload_documents(files: list[UploadFile] = File(...)):
     try:
         for file in files:
             file_data = await file.read()
+            file_size = len(file_data)
+            
+            if file_size > MAX_FILE_SIZE_BYTES:
+                raise HTTPException(status_code=400, detail=f"File '{file.filename}' exceeds the maximum allowed size of {MAX_FILE_SIZE_MB} MB")
+
             file_name = file.filename
 
             # Upload the file to MinIO using the put_object API call
@@ -245,7 +253,7 @@ async def upload_documents(files: list[UploadFile] = File(...)):
                 bucket_name=MINIO_BUCKET_NAME,
                 object_name=file_name,
                 data=io.BytesIO(file_data),
-                length=len(file_data),
+                length=file_size,
                 content_type=file.content_type
             )
 
