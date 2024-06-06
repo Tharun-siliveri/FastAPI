@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends, status, Query
+from fastapi import FastAPI, HTTPException, Depends, status, Query, File, UploadFile
+from minio import Minio
+from minio.error import S3Error
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from fastapi.security import OAuth2PasswordBearer
 from passlib.context import CryptContext
@@ -13,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import get_connection, close_connection
 
 from dotenv import load_dotenv
+import io
 import os
 
 load_dotenv()
@@ -210,3 +214,90 @@ async def get_users(
     users = cursor.fetchall()
     close_connection(connection)
     return users
+
+
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
+MINIO_BUCKET_NAME = os.getenv("MINIO_BUCKET_NAME")
+
+# Initialize Minio client
+minio_client = Minio(
+    MINIO_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=False 
+)
+
+# Create bucket if it does not exist
+if not minio_client.bucket_exists(MINIO_BUCKET_NAME):
+    minio_client.make_bucket(MINIO_BUCKET_NAME)
+
+@app.post("/upload")
+async def upload_documents(files: list[UploadFile] = File(...)):
+    try:
+        for file in files:
+            file_data = await file.read()
+            file_name = file.filename
+
+            # Upload the file to MinIO using the put_object API call
+            minio_client.put_object(
+                bucket_name=MINIO_BUCKET_NAME,
+                object_name=file_name,
+                data=io.BytesIO(file_data),
+                length=len(file_data),
+                content_type=file.content_type
+            )
+
+        return {"message": "Files uploaded successfully"}
+    except S3Error as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/download")
+async def download_document(file_name: str):
+    try:
+        # Check if the object exists before generating a presigned URL
+        found = minio_client.stat_object(MINIO_BUCKET_NAME, file_name)
+        
+        # If found, generate a presigned URL for downloading the file
+        presigned_url = minio_client.presigned_get_object(
+            bucket_name=MINIO_BUCKET_NAME,
+            object_name=file_name,
+            expires=datetime.timedelta(hours=1)  # URL valid for 1 hour
+        )
+        return {"url": presigned_url}
+    except S3Error as e:
+        # Handle the case where the file does not exist
+        if e.code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="File not found")
+        else:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/blob")
+async def get_blob(file_name: str):
+    try:
+        # Check if the file exists by retrieving its metadata
+        minio_client.stat_object(MINIO_BUCKET_NAME, file_name)
+        
+        # Fetch the file from MinIO
+        response = minio_client.get_object(MINIO_BUCKET_NAME, file_name)
+        
+        # Get the content type (you might want to store and retrieve this if necessary)
+        content_type = response.headers.get('Content-Type', 'application/octet-stream')
+
+        # Stream the file content as a response with appropriate headers
+        return StreamingResponse(
+            io.BytesIO(response.read()), 
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={file_name}"
+            }
+        )
+    except S3Error as e:
+        # Handle errors, such as the file not existing
+        if e.code == "NoSuchKey":
+            raise HTTPException(status_code=404, detail="File not found")
+        else:
+            raise HTTPException(status_code=500, detail=str(e))
+        
+# Aptus_Generative-AI_Whitepaper_compressed.pdf
